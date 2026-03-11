@@ -48,7 +48,7 @@ python scripts/train.py --model-name yolo26s --batch-size 8 --epochs 100 --patie
 ## Evaluate
 
 ```bash
-python evaluate.py --model-name yolo26s
+python scripts/evaluate.py --model-name yolo26s
 ```
 
 Output:
@@ -57,18 +57,18 @@ Output:
 Loading the trained model for final evaluation of yolo26s...
 Evaluating on the TEST dataset...
 --- FINAL REAL-WORLD SCORES ---
-mAP50 (Detection accuracy): 0.0000
-mAP50-95 (Localization accuracy): 0.0000
+mAP50 (Detection accuracy): 0.6416
+mAP50-95 (Localization accuracy): 0.2873
 ```
 
 ```
 mv ./runs/detect/val/BoxF1_curve.png ./
 ```
 
-<img src="F1_curve.png" alt="Confusion Matrix" width="600">
+<img src="BoxF1_curve.png" alt="Confusion Matrix" width="600">
 
 Get the confidence on *F1_curve.png* to run the inference with
 
 ```
-python scripts/inference.py --model-name yolo26s --image-path "./test_images/" --confidence 0.3
+python scripts/inference.py --model-name yolo26s --image-path "./test_images/" --confidence 0.309
 ```

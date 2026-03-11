@@ -21,7 +21,7 @@ def train_model(model_name, batch_size, epochs, patience):
         name=model_name,  # folder where the weights are going to be saved
     )
 
-    print("Training finished. Best weights are saved on Acne_Detection/run_01/weights/best.pt")
+    print("Training finished. Best weights are saved on Acne_Detection/{model_name}/weights/best.pt")
 
 
 if __name__ == "__main__":
