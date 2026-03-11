@@ -1,0 +1,5 @@
+acne-dataset/
+test_images/
+runs/
+*.zip
+*.pt

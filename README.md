@@ -18,35 +18,57 @@ conda activate AcneDetectionAnalysis
 pip install -r requirements.txt
 ```
 
-## Run
+## Train
 
-In mtr-skin-analysis folder run:
+Download and unzip the [kaggle dataset](https://www.kaggle.com/datasets/osmankagankurnaz/acne-dataset-in-yolov8-format?resource=download).
 
-```bash
-gunicorn -w 1 -b 0.0.0.0:7871 AcneDetectionAnalysis:app --env origins="origins.txt" --env flask_key="morethanreal_acne_detection_analysis"
+```
+unzip archive.zip
+mv data-2/ acne-dataset
+```
+
+Change the file in acne-dataset/data.yaml with:
+
+```
+path: <Change for the full path to acne-dataset>
+train: train/images
+val: valid/images
+test: test/images
+
+nc: 1
+names: ['Acne']
+```
+
+Run the training script
+
+```
+python scripts/train.py --model-name yolo26s --batch-size 8 --epochs 100 --patience 15
 ```
 
 ## Evaluate
 
-Download [dataset](https://www.kaggle.com/datasets/osmankagankurnaz/acne-dataset-in-yolov8-format?resource=download).
-
-To evaluate, download the dataset inside `AcneDetectionAnalysis/` folder, run the flask app with gunicorn command above and then run `evaluate.py` in `AcneDetectionAnalysis/` folder:
-
 ```bash
-python evaluate.py
+python evaluate.py --model-name yolo26s
 ```
 
 Output:
 
 ```
-Number of samples tested: 0
-Overall Accuracy: 00.00%
-
-Per-Class Accuracy:
-Class 0: 00.00% (0/0)
-Class 1: 00.00% (0/0)
-Class 2: 00.00% (0/0)
-Class 3: 00.00% (0/0)
+Loading the trained model for final evaluation of yolo26s...
+Evaluating on the TEST dataset...
+--- FINAL REAL-WORLD SCORES ---
+mAP50 (Detection accuracy): 0.0000
+mAP50-95 (Localization accuracy): 0.0000
 ```
 
-<img src="confusion_matrix.png" alt="Confusion Matrix" width="600">
+```
+mv ./runs/detect/val/BoxF1_curve.png ./
+```
+
+<img src="F1_curve.png" alt="Confusion Matrix" width="600">
+
+Get the confidence on *F1_curve.png* to run the inference with
+
+```
+python scripts/inference.py --model-name yolo26s --image-path "./test_images/" --confidence 0.3
+```
