@@ -72,3 +72,11 @@ Get the confidence on *F1_curve.png* to run the inference with
 ```
 python scripts/inference.py --model-name yolo26s --image-path "./test_images/" --confidence 0.309
 ```
+
+## Results
+
+| Model | mAP50 | mAP50-95 | File size .pt (MB) | 
+| :------------------- | :----- | :-------------- | :---------------------- |
+| yolov8n | **0.6433** | 0.2846 | 6.24 |
+| yolo26n | 0.6110 | 0.2698 | **5.28** |
+| yolo26s | 0.6416 | **0.2873** | 19.4 |
