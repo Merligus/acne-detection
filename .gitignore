@@ -1,4 +1,5 @@
 acne-dataset/
+acne04-dataset/
 test_images/
 runs/
 *.zip
