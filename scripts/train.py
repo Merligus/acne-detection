@@ -2,26 +2,30 @@ from ultralytics import YOLO
 import argparse
 
 
-def train_model(model_name, batch_size, epochs, patience):
+def train_model(model_name, epochs, patience, dataset):
     model_weight = f"{model_name}.pt"
     # load yolo model
     model = YOLO(model_weight)
 
-    print("Starting fine-tuning for acne detection...")
-
     # start training
     results = model.train(
-        data="acne-dataset/data.yaml",  # Seu arquivo de configuração criado acima
+        data=f"{dataset}/data.yaml",
         epochs=epochs,
-        imgsz=640,  # default image size for yolo
-        batch=batch_size,  # if low memory use a smaller batch size
+        imgsz=1280,  # higher resolution to preserve small acne lesions
+        batch=2,  # small fixed batch to avoid system RAM OOM
         patience=patience,  # stop training if no evolution after 'patience' epochs
         device=0,  # use gpu 0. use 'cpu' if no gpu
         project="Acne_Detection",
         name=model_name,  # folder where the weights are going to be saved
+        cos_lr=True,  # cosine LR decay for smoother convergence
+        scale=0.9,  # aggressive scale augmentation for variable-resolution images
+        translate=0.2,  # slightly more spatial variation
+        mosaic=1.0,  # keeps mosaic (good for small objects)
+        erasing=0.4,  # random erasing for regularization
+        workers=2,  # keep low to manage RAM usage
     )
 
-    print("Training finished. Best weights are saved on Acne_Detection/{model_name}/weights/best.pt")
+    print(f"Training finished. Best weights saved at Acne_Detection/{model_name}/weights/best.pt")
 
 
 if __name__ == "__main__":
@@ -31,12 +35,6 @@ if __name__ == "__main__":
         type=str,
         default="yolo26s",
         help="Name of the YOLO model to train (default: yolo26s)",
-    )
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=8,
-        help="Batch size for training (default: 8)",
     )
     parser.add_argument(
         "--epochs",
@@ -50,5 +48,11 @@ if __name__ == "__main__":
         default=15,
         help="Patience for early stopping (default: 15)",
     )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default="acne-dataset",
+        help="Dataset folder name (default: acne04-dataset)",
+    )
     args = parser.parse_args()
-    train_model(args.model_name, args.batch_size, args.epochs, args.patience)
+    train_model(args.model_name, args.epochs, args.patience, args.dataset)

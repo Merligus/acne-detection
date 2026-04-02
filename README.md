@@ -42,23 +42,23 @@ names: ['Acne']
 Run the training script
 
 ```
-python scripts/train.py --model-name yolo26s --batch-size 8 --epochs 100 --patience 15
+python scripts/train.py --model-name yolov8n --epochs 300 --patience 50 --dataset acne-dataset
 ```
 
 ## Evaluate
 
 ```bash
-python scripts/evaluate.py --model-name yolo26s
+python scripts/evaluate.py --model-name yolov8n
 ```
 
 Output:
 
 ```
-Loading the trained model for final evaluation of yolo26s...
+Loading the trained model for final evaluation of yolov8n...
 Evaluating on the TEST dataset...
 --- FINAL REAL-WORLD SCORES ---
-mAP50 (Detection accuracy): 0.6416
-mAP50-95 (Localization accuracy): 0.2873
+mAP50 (Detection accuracy): 0.6433
+mAP50-95 (Localization accuracy): 0.3007
 ```
 
 ```
@@ -70,13 +70,13 @@ mv ./runs/detect/val/BoxF1_curve.png ./
 Get the confidence on *F1_curve.png* to run the inference with
 
 ```
-python scripts/inference.py --model-name yolo26s --image-path "./test_images/" --confidence 0.309
+python scripts/inference.py --model-name yolov8n --image-path "./test_images/" --confidence 0.255
 ```
 
 ## Results
 
 | Model | mAP50 | mAP50-95 | File size .pt (MB) | 
 | :------------------- | :----- | :-------------- | :---------------------- |
-| yolov8n | **0.6433** | 0.2846 | 6.24 |
+| yolov8n | **0.6433** | **0.3007** | 6.24 |
 | yolo26n | 0.6110 | 0.2698 | **5.28** |
-| yolo26s | 0.6416 | **0.2873** | 19.4 |
+| yolo26s | 0.6416 | 0.2873 | 19.4 |

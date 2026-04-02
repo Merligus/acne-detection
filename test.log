@@ -18,3 +18,8 @@
 2026-03-24 14:00:29 - INFO - --- FINAL REAL-WORLD SCORES ---
 2026-03-24 14:00:29 - INFO - mAP50 (Detection accuracy): 0.6110
 2026-03-24 14:00:29 - INFO - mAP50-95 (Localization accuracy): 0.2698
+2026-04-02 14:12:50 - INFO - Loading the trained model for final evaluation of yolov8n...
+2026-04-02 14:12:50 - INFO - Evaluating on the TEST dataset...
+2026-04-02 14:12:58 - INFO - --- FINAL REAL-WORLD SCORES ---
+2026-04-02 14:12:58 - INFO - mAP50 (Detection accuracy): 0.6433
+2026-04-02 14:12:58 - INFO - mAP50-95 (Localization accuracy): 0.3007
