@@ -48,6 +48,7 @@ class MultiTaskImageClassifier:
         ckpt_path=None,
         checkpoint_dir=None,
         logging=None,
+        image_size: int = 512,
         density_map_size: int = 56,
         density_loss_weight: float = 100.0,
         count_loss_weight: float = 0.05,
@@ -56,6 +57,7 @@ class MultiTaskImageClassifier:
         self.logging = logging
         self.num_classes = num_classes
         self.classes = classes
+        self.image_size = image_size
         self.density_map_size = density_map_size
         self.density_loss_weight = density_loss_weight
         self.count_loss_weight = count_loss_weight
@@ -97,6 +99,8 @@ class MultiTaskImageClassifier:
             self.image_processor = AutoImageProcessor.from_pretrained(
                 self.model_name,
                 token=token,
+                do_center_crop=False,
+                size={"height": self.image_size, "width": self.image_size},
             )
             self.backbone = AutoModel.from_pretrained(
                 self.model_name,
