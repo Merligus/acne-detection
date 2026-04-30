@@ -144,10 +144,7 @@ if __name__ == "__main__":
 
     classes = [0, 1, 2]
     num_classes = len(classes)
-    logging.info(
-        f"Loaded {len(train_samples)} train / {len(val_samples)} val / "
-        f"{len(test_samples)} test samples across classes {classes}"
-    )
+    logging.info(f"Loaded {len(train_samples)} train / {len(val_samples)} val / " f"{len(test_samples)} test samples across classes {classes}")
 
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 

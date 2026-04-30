@@ -22,6 +22,39 @@ from transformers import (
 from MultiTaskModule import MultiTaskDinoV3
 
 
+class LabelDistributionLoss(nn.Module):
+    """
+    KL divergence between predicted softmax and a discrete Gaussian centered
+    on the true ordinal label. Encodes the inductive bias that off-by-one
+    errors are less wrong than off-by-many errors, which plain CE ignores.
+
+    sigma controls how much mass leaks to neighbors:
+        0.5  -> sharp, close to one-hot (mild ordinal smoothing)
+        1.0  -> moderate (good default for 3-4 ordinal classes)
+        1.5  -> very smooth, lots of mass on neighbors
+    """
+
+    def __init__(self, num_classes: int, sigma: float = 1.0):
+        super().__init__()
+        self.num_classes = num_classes
+        self.sigma = sigma
+        self.register_buffer(
+            "class_idx",
+            torch.arange(num_classes, dtype=torch.float32),
+        )
+
+    def _build_targets(self, labels: torch.Tensor) -> torch.Tensor:
+        labels_f = labels.float().unsqueeze(1)
+        diffs = self.class_idx.unsqueeze(0) - labels_f
+        log_probs = -(diffs**2) / (2.0 * self.sigma**2)
+        return torch.softmax(log_probs, dim=1)
+
+    def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        target = self._build_targets(labels)
+        log_pred = torch.log_softmax(logits, dim=1)
+        return F.kl_div(log_pred, target, reduction="batchmean")
+
+
 class MultiTaskImageClassifier:
     """
     Same surface as the original ImageClassifier; the differences are:
@@ -52,6 +85,7 @@ class MultiTaskImageClassifier:
         density_map_size: int = 56,
         density_loss_weight: float = 100.0,
         count_loss_weight: float = 0.05,
+        ldl_sigma: float = 1.0,
     ):
         self.model_name = model_name
         self.logging = logging
@@ -61,6 +95,7 @@ class MultiTaskImageClassifier:
         self.density_map_size = density_map_size
         self.density_loss_weight = density_loss_weight
         self.count_loss_weight = count_loss_weight
+        self.ldl_sigma = ldl_sigma
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -245,7 +280,10 @@ class MultiTaskImageClassifier:
             num_warmup_steps=warmup_steps,
             num_training_steps=total_steps,
         )
-        criterion_cls = nn.CrossEntropyLoss()
+        criterion_cls = LabelDistributionLoss(
+            num_classes=self.num_classes,
+            sigma=self.ldl_sigma,
+        ).to(self.device)
 
         scaler = torch.amp.GradScaler("cuda", enabled=torch.cuda.is_available())
 
