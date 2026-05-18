@@ -86,7 +86,7 @@ class MultiTaskAcneDataset(Dataset):
 
     def __init__(
         self,
-        samples: List[Tuple[str, str, int]],
+        samples: List[Tuple[str, str]],
         image_processor,
         density_map_size: int = 56,
         sigma: float = 2.0,

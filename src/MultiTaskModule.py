@@ -93,6 +93,10 @@ class MultiTaskDinoV3(nn.Module):
                 p.requires_grad = False
             self.backbone.eval()
 
+        # DINOv3 (S/B/L/H+) prepends 4 register tokens between CLS and patches.
+        # Older ViTs without registers report 0 here.
+        self.num_register_tokens = getattr(backbone.config, "num_register_tokens", 0)
+
         hidden_size = getattr(backbone.config, "hidden_size", None)
         self.cls_head = nn.Linear(hidden_size, num_classes)
         self.density_head = DensityHead(hidden_size, target_size=density_map_size)
@@ -101,7 +105,7 @@ class MultiTaskDinoV3(nn.Module):
         outputs = self.backbone(pixel_values=pixel_values)
         last_hidden = outputs.last_hidden_state  # [B, 1+N, D]
         cls_token = last_hidden[:, 0]
-        patch_tokens = last_hidden[:, 1:]
+        patch_tokens = last_hidden[:, 1 + self.num_register_tokens :]
 
         logits = self.cls_head(cls_token)
         density = self.density_head(patch_tokens)

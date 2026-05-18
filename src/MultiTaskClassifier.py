@@ -32,9 +32,13 @@ class LabelDistributionLoss(nn.Module):
         0.5  -> sharp, close to one-hot (mild ordinal smoothing)
         1.0  -> moderate (good default for 3-4 ordinal classes)
         1.5  -> very smooth, lots of mass on neighbors
+
+    class_weights (optional): per-class multiplier applied to the per-sample
+    KL term before averaging. Useful for imbalanced datasets — pass a tensor
+    of shape [num_classes].
     """
 
-    def __init__(self, num_classes: int, sigma: float = 1.0):
+    def __init__(self, num_classes: int, sigma: float = 1.0, class_weights: torch.Tensor = None):
         super().__init__()
         self.num_classes = num_classes
         self.sigma = sigma
@@ -42,6 +46,10 @@ class LabelDistributionLoss(nn.Module):
             "class_idx",
             torch.arange(num_classes, dtype=torch.float32),
         )
+        if class_weights is not None:
+            self.register_buffer("class_weights", class_weights.float())
+        else:
+            self.class_weights = None
 
     def _build_targets(self, labels: torch.Tensor) -> torch.Tensor:
         labels_f = labels.float().unsqueeze(1)
@@ -52,7 +60,11 @@ class LabelDistributionLoss(nn.Module):
     def forward(self, logits: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
         target = self._build_targets(labels)
         log_pred = torch.log_softmax(logits, dim=1)
-        return F.kl_div(log_pred, target, reduction="batchmean")
+        if self.class_weights is None:
+            return F.kl_div(log_pred, target, reduction="batchmean")
+        per_sample = F.kl_div(log_pred, target, reduction="none").sum(dim=1)
+        weights = self.class_weights[labels]
+        return (per_sample * weights).mean()
 
 
 class MultiTaskImageClassifier:
@@ -83,9 +95,11 @@ class MultiTaskImageClassifier:
         logging=None,
         image_size: int = 512,
         density_map_size: int = 56,
-        density_loss_weight: float = 100.0,
+        density_loss_weight: float = 20.0,
         count_loss_weight: float = 0.05,
         ldl_sigma: float = 1.0,
+        class_weights=None,
+        no_resume: bool = False,
     ):
         self.model_name = model_name
         self.logging = logging
@@ -96,17 +110,18 @@ class MultiTaskImageClassifier:
         self.density_loss_weight = density_loss_weight
         self.count_loss_weight = count_loss_weight
         self.ldl_sigma = ldl_sigma
+        self.class_weights = class_weights
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self._ckpt_filename = model_name.replace("/", "_") + "_multitask_best.pt"
 
-        if ckpt_path is None and checkpoint_dir is not None:
+        if ckpt_path is None and checkpoint_dir is not None and not no_resume:
             candidate = os.path.join(checkpoint_dir, self._ckpt_filename)
             if os.path.isfile(candidate):
                 ckpt_path = candidate
                 if logging:
-                    logging.info(f"Found existing checkpoint: {candidate}")
+                    logging.warning(f"Resuming from existing checkpoint: {candidate}")
 
         if ckpt_path:
             ckpt = torch.load(ckpt_path, map_location=self.device)
@@ -183,6 +198,7 @@ class MultiTaskImageClassifier:
 
         self.model.eval()
         correct, total, loss_sum, mae_sum = 0, 0, 0.0, 0.0
+        autocast_enabled = torch.cuda.is_available()
         with torch.no_grad():
             for batch in val_loader:
                 pixel_values = batch["pixel_values"].to(self.device, non_blocking=True)
@@ -190,15 +206,16 @@ class MultiTaskImageClassifier:
                 density_target = batch["density_target"].to(self.device, non_blocking=True)
                 count_target = batch["count"].to(self.device, non_blocking=True)
 
-                logits, density_pred = self.model(pixel_values)
-                total_loss, _, _, _ = self._multi_task_loss(
-                    logits,
-                    density_pred,
-                    labels,
-                    density_target,
-                    count_target,
-                    criterion_cls,
-                )
+                with torch.amp.autocast("cuda", enabled=autocast_enabled):
+                    logits, density_pred = self.model(pixel_values)
+                    total_loss, _, _, _ = self._multi_task_loss(
+                        logits,
+                        density_pred,
+                        labels,
+                        density_target,
+                        count_target,
+                        criterion_cls,
+                    )
                 loss_sum += total_loss.item() * labels.size(0)
 
                 preds = logits.argmax(dim=-1)
@@ -280,12 +297,17 @@ class MultiTaskImageClassifier:
             num_warmup_steps=warmup_steps,
             num_training_steps=total_steps,
         )
+        class_weights_tensor = None
+        if self.class_weights is not None:
+            class_weights_tensor = torch.tensor(self.class_weights, dtype=torch.float32)
         criterion_cls = LabelDistributionLoss(
             num_classes=self.num_classes,
             sigma=self.ldl_sigma,
+            class_weights=class_weights_tensor,
         ).to(self.device)
 
-        scaler = torch.amp.GradScaler("cuda", enabled=torch.cuda.is_available())
+        autocast_enabled = torch.cuda.is_available()
+        scaler = torch.amp.GradScaler("cuda", enabled=autocast_enabled)
 
         best_acc = 0.0
         global_step = 0
@@ -296,22 +318,23 @@ class MultiTaskImageClassifier:
 
             running_total = running_cls = running_density = running_count = 0.0
 
-            for i, batch in enumerate(train_loader, start=1):
+            for batch in train_loader:
                 pixel_values = batch["pixel_values"].to(self.device, non_blocking=True)
                 labels = batch["labels"].to(self.device, non_blocking=True)
                 density_target = batch["density_target"].to(self.device, non_blocking=True)
                 count_target = batch["count"].to(self.device, non_blocking=True)
 
                 optimizer.zero_grad(set_to_none=True)
-                logits, density_pred = self.model(pixel_values)
-                total_loss, l_cls, l_dens, l_cnt = self._multi_task_loss(
-                    logits,
-                    density_pred,
-                    labels,
-                    density_target,
-                    count_target,
-                    criterion_cls,
-                )
+                with torch.amp.autocast("cuda", enabled=autocast_enabled):
+                    logits, density_pred = self.model(pixel_values)
+                    total_loss, l_cls, l_dens, l_cnt = self._multi_task_loss(
+                        logits,
+                        density_pred,
+                        labels,
+                        density_target,
+                        count_target,
+                        criterion_cls,
+                    )
 
                 scaler.scale(total_loss).backward()
                 scaler.step(optimizer)

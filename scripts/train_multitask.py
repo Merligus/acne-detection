@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
-from MultiTask import MultiTaskImageClassifier
+from MultiTaskClassifier import MultiTaskImageClassifier
 from MultiTaskAcneDataset import MultiTaskAcneDataset
 
 load_dotenv()
@@ -123,6 +123,46 @@ if __name__ == "__main__":
         type=float,
         help="Gaussian sigma (in density-map pixels) for each lesion.",
     )
+    parser.add_argument(
+        "--density-loss-weight",
+        required=False,
+        default=20.0,
+        type=float,
+        help="Multiplier on the density MSE term in the composite loss.",
+    )
+    parser.add_argument(
+        "--count-loss-weight",
+        required=False,
+        default=0.05,
+        type=float,
+        help="Multiplier on the Smooth-L1 count term in the composite loss.",
+    )
+    parser.add_argument(
+        "--ldl-sigma",
+        required=False,
+        default=1.0,
+        type=float,
+        help="Sigma of the discrete Gaussian target in LabelDistributionLoss.",
+    )
+    parser.add_argument(
+        "--checkpoint-dir",
+        required=False,
+        default="./saved_models",
+        type=str,
+        help="Directory to save (and possibly auto-resume from) model checkpoints.",
+    )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Skip auto-resume from any existing checkpoint in --checkpoint-dir.",
+    )
+    parser.add_argument(
+        "--class-weights",
+        required=False,
+        default="",
+        type=str,
+        help="Comma-separated per-class multipliers for LDL (e.g. '1.0,0.8,1.6'). Empty disables.",
+    )
     args = parser.parse_args()
 
     DATA_DIR = args.dataset_name
@@ -136,7 +176,12 @@ if __name__ == "__main__":
     EVAL_EVERY_STEPS = args.eval_every_steps
     DENSITY_MAP_SIZE = args.density_map_size
     DENSITY_SIGMA = args.density_sigma
-    CHECKPOINT_DIR = "./saved_models"
+    DENSITY_LOSS_WEIGHT = args.density_loss_weight
+    COUNT_LOSS_WEIGHT = args.count_loss_weight
+    LDL_SIGMA = args.ldl_sigma
+    CHECKPOINT_DIR = args.checkpoint_dir
+    NO_RESUME = args.no_resume
+    CLASS_WEIGHTS = [float(x) for x in args.class_weights.split(",")] if args.class_weights else None
 
     train_samples = build_samples(os.path.join(DATA_DIR, "train"))
     val_samples = build_samples(os.path.join(DATA_DIR, "valid"))
@@ -156,6 +201,11 @@ if __name__ == "__main__":
         checkpoint_dir=CHECKPOINT_DIR,
         logging=logging,
         density_map_size=DENSITY_MAP_SIZE,
+        density_loss_weight=DENSITY_LOSS_WEIGHT,
+        count_loss_weight=COUNT_LOSS_WEIGHT,
+        ldl_sigma=LDL_SIGMA,
+        class_weights=CLASS_WEIGHTS,
+        no_resume=NO_RESUME,
     )
 
     train_dataset = MultiTaskAcneDataset(
