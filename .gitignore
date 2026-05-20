@@ -5,3 +5,8 @@ test_images/
 runs/
 *.zip
 *.pt
+*.pyc
+*.log
+*.csv
+*.env
+*.pth

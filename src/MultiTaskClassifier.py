@@ -100,6 +100,7 @@ class MultiTaskImageClassifier:
         ldl_sigma: float = 1.0,
         class_weights=None,
         no_resume: bool = False,
+        freeze_backbone: bool = True,
     ):
         self.model_name = model_name
         self.logging = logging
@@ -163,7 +164,7 @@ class MultiTaskImageClassifier:
                     token=token,
                 ).to_json_string()
             )
-            self.freeze_backbone = True
+            self.freeze_backbone = freeze_backbone
             self.model = MultiTaskDinoV3(
                 self.backbone,
                 self.num_classes,
@@ -194,10 +195,10 @@ class MultiTaskImageClassifier:
 
     def evaluate(self, val_loader, criterion_cls) -> Dict[str, float]:
         if not val_loader:
-            return {"val_loss": 0, "val_acc": 0, "val_mae": 0}
+            return {"val_loss": 0, "val_acc": 0, "val_mae": 0, "val_rmse": 0}
 
         self.model.eval()
-        correct, total, loss_sum, mae_sum = 0, 0, 0.0, 0.0
+        correct, total, loss_sum, mae_sum, mse_sum = 0, 0, 0.0, 0.0, 0.0
         autocast_enabled = torch.cuda.is_available()
         with torch.no_grad():
             for batch in val_loader:
@@ -223,12 +224,15 @@ class MultiTaskImageClassifier:
                 total += labels.size(0)
 
                 count_pred = density_pred.flatten(1).sum(dim=1)
-                mae_sum += (count_pred - count_target).abs().sum().item()
+                diff = count_pred - count_target
+                mae_sum += diff.abs().sum().item()
+                mse_sum += (diff * diff).sum().item()
 
         return {
             "val_loss": loss_sum / max(total, 1),
             "val_acc": correct / max(total, 1),
             "val_mae": mae_sum / max(total, 1),
+            "val_rmse": math.sqrt(mse_sum / max(total, 1)),
         }
 
     # ----- inference ---------------------------------------------------------
@@ -283,13 +287,36 @@ class MultiTaskImageClassifier:
         warmup_ratio,
         checkpoint_dir,
         classes,
+        density_lr=None,
+        density_weight_decay=None,
+        backbone_lr=None,
     ):
         self.classes = classes
-        optimizer = torch.optim.AdamW(
-            filter(lambda p: p.requires_grad, self.model.parameters()),
-            lr=lr,
-            weight_decay=weight_decay,
-        )
+        # Per-head LR + WD: classification head uses `lr` / `weight_decay`,
+        # density head uses `density_lr` / `density_weight_decay` (each falling
+        # back to the shared value when None). When the backbone is unfrozen,
+        # a third param group covers the backbone at `backbone_lr` (defaults to
+        # density_lr). Param groups inherit the same cosine warmup multiplier
+        # so all heads decay in sync.
+        cls_params = [p for p in self.model.cls_head.parameters() if p.requires_grad]
+        density_params = [p for p in self.model.density_head.parameters() if p.requires_grad]
+        effective_density_lr = density_lr if density_lr is not None else lr
+        effective_density_wd = density_weight_decay if density_weight_decay is not None else weight_decay
+        param_groups = [
+            {"params": cls_params, "lr": lr, "weight_decay": weight_decay},
+            {"params": density_params, "lr": effective_density_lr, "weight_decay": effective_density_wd},
+        ]
+        backbone_lr_used = None
+        if not self.freeze_backbone:
+            backbone_params = [p for p in self.model.backbone.parameters() if p.requires_grad]
+            backbone_lr_used = backbone_lr if backbone_lr is not None else effective_density_lr
+            param_groups.append({"params": backbone_params, "lr": backbone_lr_used, "weight_decay": weight_decay})
+        optimizer = torch.optim.AdamW(param_groups)
+        if self.logging:
+            msg = f"Optimizer: cls_head lr={lr} wd={weight_decay} | " f"density_head lr={effective_density_lr} wd={effective_density_wd}"
+            if backbone_lr_used is not None:
+                msg += f" | backbone lr={backbone_lr_used} wd={weight_decay} (UNFROZEN)"
+            self.logging.info(msg)
         total_steps = epochs * math.ceil(len(train_loader))
         warmup_steps = int(warmup_ratio * total_steps)
         scheduler = get_cosine_schedule_with_warmup(
@@ -314,7 +341,8 @@ class MultiTaskImageClassifier:
 
         for epoch in range(1, epochs + 1):
             self.model.train()
-            self.model.backbone.eval()  # keep frozen backbone in eval mode
+            if self.freeze_backbone:
+                self.model.backbone.eval()  # keep frozen backbone in eval mode
 
             running_total = running_cls = running_density = running_count = 0.0
 
@@ -349,16 +377,7 @@ class MultiTaskImageClassifier:
 
                 if global_step % eval_every_steps == 0:
                     metrics = self.evaluate(val_loader, criterion_cls)
-                    self.logging.info(
-                        f"[epoch {epoch} | step {global_step}] "
-                        f"train_total={running_total/eval_every_steps:.4f} "
-                        f"train_cls={running_cls/eval_every_steps:.4f} "
-                        f"train_dens={running_density/eval_every_steps:.4f} "
-                        f"train_cnt={running_count/eval_every_steps:.4f} "
-                        f"val_loss={metrics['val_loss']:.4f} "
-                        f"val_acc={metrics['val_acc']*100:.2f}% "
-                        f"val_count_mae={metrics['val_mae']:.2f}"
-                    )
+                    self.logging.info(f"[epoch {epoch} | step {global_step}] " f"train_total={running_total/eval_every_steps:.4f} " f"train_cls={running_cls/eval_every_steps:.4f} " f"train_dens={running_density/eval_every_steps:.4f} " f"train_cnt={running_count/eval_every_steps:.4f} " f"val_loss={metrics['val_loss']:.4f} " f"val_acc={metrics['val_acc']*100:.2f}% " f"val_count_mae={metrics['val_mae']:.2f} " f"val_count_rmse={metrics['val_rmse']:.2f}")
                     running_total = running_cls = running_density = running_count = 0.0
 
                     if metrics["val_acc"] >= best_acc:
@@ -383,9 +402,7 @@ class MultiTaskImageClassifier:
                     global_step,
                     epoch,
                 )
-            self.logging.info(
-                f"END EPOCH {epoch}: val_loss={metrics['val_loss']:.4f} " f"val_acc={metrics['val_acc']*100:.2f}% " f"val_count_mae={metrics['val_mae']:.2f} " f"(best_acc={best_acc*100:.2f}%)"
-            )
+            self.logging.info(f"END EPOCH {epoch}: val_loss={metrics['val_loss']:.4f} " f"val_acc={metrics['val_acc']*100:.2f}% " f"val_count_mae={metrics['val_mae']:.2f} " f"val_count_rmse={metrics['val_rmse']:.2f} " f"(best_acc={best_acc*100:.2f}%)")
 
         metrics = self.evaluate(test_loader, criterion_cls)
-        self.logging.info(f"END TRAIN: test_loss={metrics['val_loss']:.4f} " f"test_acc={metrics['val_acc']*100:.2f}% " f"test_count_mae={metrics['val_mae']:.2f}")
+        self.logging.info(f"END TRAIN: test_loss={metrics['val_loss']:.4f} " f"test_acc={metrics['val_acc']*100:.2f}% " f"test_count_mae={metrics['val_mae']:.2f} " f"test_count_rmse={metrics['val_rmse']:.2f}")

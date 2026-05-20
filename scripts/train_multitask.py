@@ -86,7 +86,33 @@ if __name__ == "__main__":
         required=False,
         default=5e-4,
         type=float,
-        help="Training learning rate parameter.",
+        help="Training learning rate parameter (applied to the classification head).",
+    )
+    parser.add_argument(
+        "--density-lr",
+        required=False,
+        default=None,
+        type=float,
+        help="Learning rate for the density head. Defaults to --learning-rate when omitted.",
+    )
+    parser.add_argument(
+        "--density-weight-decay",
+        required=False,
+        default=None,
+        type=float,
+        help="Weight decay for the density head. Defaults to --weight-decay when omitted.",
+    )
+    parser.add_argument(
+        "--unfreeze-backbone",
+        action="store_true",
+        help="Train the DINOv3 backbone end-to-end. Default: frozen.",
+    )
+    parser.add_argument(
+        "--backbone-lr",
+        required=False,
+        default=None,
+        type=float,
+        help="Learning rate for the backbone when --unfreeze-backbone. Defaults to --density-lr.",
     )
     parser.add_argument(
         "--weight-decay",
@@ -163,6 +189,41 @@ if __name__ == "__main__":
         type=str,
         help="Comma-separated per-class multipliers for LDL (e.g. '1.0,0.8,1.6'). Empty disables.",
     )
+    parser.add_argument(
+        "--density-source",
+        required=False,
+        default="gt",
+        choices=["gt", "yolo", "segformer"],
+        help="Density-map supervision signal for the train split. 'gt': Gaussians from label boxes (default). 'yolo': YOLO-predicted boxes weighted by confidence. 'segformer': SegFormer probability mask normalized per-image to integrate to gt_count.",
+    )
+    parser.add_argument(
+        "--yolo-teacher-weights",
+        required=False,
+        default="",
+        type=str,
+        help="Path to a YOLO best.pt to act as density teacher. Required with --density-source yolo.",
+    )
+    parser.add_argument(
+        "--yolo-teacher-conf",
+        required=False,
+        default=0.25,
+        type=float,
+        help="YOLO confidence threshold for the density-teacher precompute.",
+    )
+    parser.add_argument(
+        "--segformer-weights",
+        required=False,
+        default="",
+        type=str,
+        help="Path to a SegFormer state_dict .pth file. Required with --density-source segformer.",
+    )
+    parser.add_argument(
+        "--segformer-base-model",
+        required=False,
+        default="nvidia/segformer-b1-finetuned-ade-512-512",
+        type=str,
+        help="HF model id used to build the SegFormer architecture before loading the state_dict.",
+    )
     args = parser.parse_args()
 
     DATA_DIR = args.dataset_name
@@ -171,7 +232,11 @@ if __name__ == "__main__":
     NUM_WORKERS = min(2, os.cpu_count() or 2)
     EPOCHS = args.epochs
     LR = args.learning_rate
+    DENSITY_LR = args.density_lr
     WEIGHT_DECAY = args.weight_decay
+    DENSITY_WEIGHT_DECAY = args.density_weight_decay
+    UNFREEZE_BACKBONE = args.unfreeze_backbone
+    BACKBONE_LR = args.backbone_lr
     WARMUP_RATIO = args.warmup_ratio
     EVAL_EVERY_STEPS = args.eval_every_steps
     DENSITY_MAP_SIZE = args.density_map_size
@@ -182,6 +247,15 @@ if __name__ == "__main__":
     CHECKPOINT_DIR = args.checkpoint_dir
     NO_RESUME = args.no_resume
     CLASS_WEIGHTS = [float(x) for x in args.class_weights.split(",")] if args.class_weights else None
+    DENSITY_SOURCE = args.density_source
+    YOLO_TEACHER_WEIGHTS = args.yolo_teacher_weights
+    YOLO_TEACHER_CONF = args.yolo_teacher_conf
+    SEGFORMER_WEIGHTS = args.segformer_weights
+    SEGFORMER_BASE = args.segformer_base_model
+    if DENSITY_SOURCE == "yolo" and not YOLO_TEACHER_WEIGHTS:
+        raise SystemExit("--yolo-teacher-weights is required when --density-source yolo")
+    if DENSITY_SOURCE == "segformer" and not SEGFORMER_WEIGHTS:
+        raise SystemExit("--segformer-weights is required when --density-source segformer")
 
     train_samples = build_samples(os.path.join(DATA_DIR, "train"))
     val_samples = build_samples(os.path.join(DATA_DIR, "valid"))
@@ -206,14 +280,51 @@ if __name__ == "__main__":
         ldl_sigma=LDL_SIGMA,
         class_weights=CLASS_WEIGHTS,
         no_resume=NO_RESUME,
+        freeze_backbone=not UNFREEZE_BACKBONE,
     )
+
+    yolo_teacher = None
+    segformer_teacher = None
+    if DENSITY_SOURCE == "yolo":
+        from ultralytics import YOLO  # local import keeps the gt-path light
+
+        logging.info(f"Loading YOLO teacher: {YOLO_TEACHER_WEIGHTS} (conf={YOLO_TEACHER_CONF})")
+        yolo_teacher = YOLO(YOLO_TEACHER_WEIGHTS)
+    elif DENSITY_SOURCE == "segformer":
+        from transformers import SegformerForSemanticSegmentation
+
+        logging.info(f"Loading SegFormer teacher: base={SEGFORMER_BASE} weights={SEGFORMER_WEIGHTS}")
+        segformer_teacher = SegformerForSemanticSegmentation.from_pretrained(
+            SEGFORMER_BASE,
+            num_labels=2,
+            id2label={0: "background", 1: "acne"},
+            label2id={"background": 0, "acne": 1},
+            ignore_mismatched_sizes=True,
+        )
+        segformer_teacher.load_state_dict(torch.load(SEGFORMER_WEIGHTS, map_location="cpu"))
+        segformer_device = "cuda" if torch.cuda.is_available() else "cpu"
+        segformer_teacher.to(segformer_device).eval()
 
     train_dataset = MultiTaskAcneDataset(
         samples=train_samples,
         image_processor=dino.image_processor,
         density_map_size=DENSITY_MAP_SIZE,
         sigma=DENSITY_SIGMA,
+        density_source=DENSITY_SOURCE,
+        yolo_model=yolo_teacher,
+        yolo_conf=YOLO_TEACHER_CONF,
+        segformer_model=segformer_teacher,
+        segformer_device=("cuda" if torch.cuda.is_available() else "cpu"),
+        logger=logging,
     )
+    # Free the teacher's GPU memory before DINOv3 training begins — the cache
+    # is CPU tensors and the segformer model isn't needed anymore.
+    if segformer_teacher is not None:
+        segformer_teacher.to("cpu")
+        del segformer_teacher
+        torch.cuda.empty_cache()
+    # Val and test always use GT supervision so metrics reflect real labels,
+    # not the YOLO teacher we're trying to evaluate.
     val_dataset = MultiTaskAcneDataset(
         samples=val_samples,
         image_processor=dino.image_processor,
@@ -260,4 +371,7 @@ if __name__ == "__main__":
         warmup_ratio=WARMUP_RATIO,
         checkpoint_dir=CHECKPOINT_DIR,
         classes=classes,
+        density_lr=DENSITY_LR,
+        density_weight_decay=DENSITY_WEIGHT_DECAY,
+        backbone_lr=BACKBONE_LR,
     )
