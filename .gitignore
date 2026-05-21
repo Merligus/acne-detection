@@ -1,6 +1,12 @@
 acne-dataset/
 acne04-dataset/
+acne04-dataset-512/
 test_images/
 runs/
 *.zip
 *.pt
+*.pyc
+*.log
+*.csv
+*.env
+*.pth

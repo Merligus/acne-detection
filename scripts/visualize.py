@@ -48,4 +48,4 @@ def visualizar_yolo_boxes(dataset_path, num_samples=3):
 
 
 # Execute a função apontando para a raiz do seu dataset
-visualizar_yolo_boxes("acne-dataset")
+visualizar_yolo_boxes("acne04-dataset-512")

@@ -1,2 +1,20 @@
+# Core CV stack
 opencv-python==4.13.0.92
+Pillow==12.2.0
+
+# YOLO detection (baseline + ensemble teacher)
 ultralytics==8.4.21
+
+# Deep learning. Install torch/torchvision via the official selector for your
+# CUDA version first (https://pytorch.org/get-started/locally/) — the pip
+# wheels here will pick the CPU build if you skip that step.
+torch==2.11.0
+torchvision==0.26.0
+
+# Multi-task DINOv3 classifier + SegFormer teacher
+transformers==5.8.1
+python-dotenv==1.2.2
+
+# Segmentation pipeline used to train the leak-free SegFormer-B1 teacher
+segmentation-models-pytorch==0.5.0
+albumentations==2.0.8
