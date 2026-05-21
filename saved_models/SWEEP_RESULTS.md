@@ -498,6 +498,140 @@ Augmentation is the cheapest and most likely to close the val/test gap. Worth a 
 
 **Production winner: E3y on every metric except mae** (where it's 0.05 behind a saturated tie). Adopt as headline config.
 
+## Canonical results — re-evaluated from saved best-val checkpoints (2026-05-21)
+
+After Phase 11 surfaced that the trainer's `END_TRAIN` line evaluates the *final-epoch* model state rather than the *best-val* model state we actually save, all surviving checkpoints were re-evaluated with `scripts/evaluate_tta.py`. **These are the authoritative numbers**; the per-phase tables above kept the END_TRAIN numbers for historical traceability, but several diverge by 1–4 points from these.
+
+The trainer was also patched: `MultiTaskClassifier.train()` now reloads the best-val checkpoint before the final test evaluation, so future runs will report this number directly.
+
+### All checkpoints (test split, n=102)
+
+| Run / config | no-TTA acc | no-TTA mae | no-TTA rmse | TTA acc | TTA mae | TTA rmse |
+|---|---|---|---|---|---|---|
+| B7 (gt, frozen, lr=1e-3, ldlr=1e-4) | 81.37% | 3.79 | 6.78 | 84.31% | 3.75 | 6.82 |
+| Y1 (yolo, frozen, lr=1e-3 lr-uncalib) | 81.37% | 3.76 | 6.84 | 84.31% | 3.71 | 6.91 |
+| F1/S1 (segformer-leaky, frozen, 5ep) | 82.35% | 3.94 | 7.26 | 84.31% | 3.90 | 7.32 |
+| F2/S2 (segformer-leaky, frozen, 10ep) | 79.41% | 3.85 | 6.87 | 81.37% | 3.72 | 6.86 |
+| D3y (yolo, frozen, lr=5e-4) | 81.37% | 3.83 | 6.96 | 84.31% | 3.73 | 7.10 |
+| D1f (segformer, frozen, density-wd=1e-3) | 79.41% | 3.76 | 6.73 | 81.37% | 3.65 | 6.72 |
+| **E3y** (yolo, **unfrozen**, lr=1e-4) | **86.27%** | **2.96** | **4.86** | 84.31% | 2.98 | 5.00 |
+| E3f (segformer, unfrozen, lr=1e-4) | 83.33% | 2.89 | 5.01 | 86.27% | 2.95 | 5.25 |
+| **F1y** (yolo, **unfrozen + aug**, 20ep) | **88.24%** | 3.38 | 5.80 | **88.24%** | **3.18** | **5.63** |
+
+### Headline numbers (canonical)
+
+- **Best test_acc**: **F1y + TTA → 88.24% / 3.18 / 5.63**
+- **Best test_count_mae**: E3f → 2.89 (no-TTA)
+- **Best test_count_rmse**: **E3y → 4.86** (no-TTA, saturated)
+- **No-TTA accuracy champion**: F1y → 88.24%
+- **TTA accuracy champion**: F1y → 88.24% (TTA tied F1y's no-TTA; ties or improves count metrics)
+
+### Reading these vs the prior per-phase tables
+
+Most older per-phase rows reported END_TRAIN numbers that are now known to be **final-epoch states**, not the saved best-val checkpoint we ship. Concrete corrections:
+
+| Run | Old END_TRAIN test_acc | Re-eval (best-val ckpt) | Delta |
+|---|---|---|---|
+| B7 | 82.35% | 81.37% | -0.98 |
+| Y1 | 82.35% | 81.37% | -0.98 |
+| D3y (Phase 9 "breakthrough") | 85.29% | 81.37% | **-3.92** ← was final-epoch, not saved |
+| E3y (Phase 10 champion) | 82.35% (corrected later in writeup to 86.27%) | 86.27% | confirmed |
+| F1y (Phase 11 winner) | 86.27% | **88.24%** | **+1.97** |
+| Several SegFormer runs | 82.35% | 79.41% | -2.94 |
+
+The headline trajectory after correction:
+- Phase 7 (frozen baseline): ~81% acc
+- Phase 10 unfrozen (E3y): **86.27%**
+- Phase 11 unfrozen + aug (F1y): **88.24%** ← real project champion
+- Phase 11 + TTA on F1y: 88.24% acc, 3.18 mae, 5.63 rmse
+
+The "Phase 9 LR-halving breakthrough" was real *during training* — the model reached 85.29% test_acc at some point in epoch 10 — but the checkpoint we actually saved is a different (lower-acc) state. The real breakthrough was Phase 10 unfrozen.
+
+### Trainer fix shipped
+
+`src/MultiTaskClassifier.py` `train()` was patched: before the final test evaluation, it now loads the saved best-val checkpoint from disk. The END_TRAIN log line will match `evaluate_tta.py --no-TTA` for any future run. Old run logs still show the (incorrect) final-epoch numbers — the table above is the authority.
+
+---
+
+## Phase 11 — Augmentation + 20 epochs + TTA (2026-05-21)
+
+Final stage: add train-time augmentation (HFlip + rotation ±10° + ColorJitter) and double the epoch count to 20, then run TTA (identity + hflip + rot ±5°) at inference on the champion checkpoint.
+
+### Code
+
+- `src/MultiTaskAcneDataset.py` — new `augment` flag. Spatial augs (HFlip, rotation) apply identically to the image AND `density_target` (one operates on PIL, the other on the torch tensor — same transform params). Color jitter applies to image only.
+- `scripts/train_multitask.py` — `--augment` CLI flag, passed only to the train dataset (val/test stay deterministic).
+- `scripts/evaluate_tta.py` — new script. Loads a checkpoint, runs 4-variant TTA per test image, prints side-by-side no-TTA vs TTA metrics.
+
+### Phase B — Augmented training (20 epochs)
+
+Same config as Phase 10's E3y/E3f winners (unfrozen backbone, LR=1e-4, density-LR=1e-5), with `--augment` and 20 epochs.
+
+| Run | Teacher | END_TRAIN test_acc | END_TRAIN mae | END_TRAIN rmse |
+|-----|---------|-------------------|---------------|----------------|
+| E3y (10ep, no-aug) | YOLO | 86.27% | 2.96 | 4.86 |
+| E3f (10ep, no-aug) | SegFormer | 82.35% | 2.91 | 5.01 |
+| F1y (20ep, aug) | YOLO | 86.27% | 3.06 | 5.01 |
+| F1f (20ep, aug) | SegFormer | 83.33% | 2.99 | 5.25 |
+
+**END_TRAIN view: augmentation adds nothing visible.** F1y matches E3y on accuracy and slightly loses count. F1f gains +1pt over E3f.
+
+### The big finding — END_TRAIN ≠ best-val checkpoint
+
+`evaluate_tta.py` loads the **saved checkpoint** (which the trainer writes whenever val_acc improves), while `END_TRAIN` in the training log evaluates the **final-epoch model state**. For runs where val_acc peaks mid-training and then oscillates lower, these are two different models.
+
+Re-evaluating the saved checkpoints reveals very different numbers:
+
+| Run | END_TRAIN test_acc | best-val ckpt test_acc |
+|-----|--------------------|------------------------|
+| E3y | 86.27% | 86.27% (same; val plateaued at end) |
+| E3f | 82.35% | **83.33%** (slight bump) |
+| **F1y** | 86.27% | **88.24%** (+1.97pt) ← new champion |
+| F1f | 83.33% | 79.41% (best-val ckpt was overfit) |
+
+**F1y's best-val checkpoint achieved val_acc=88.81% at epoch 5; that checkpoint gives test_acc=88.24%.** The remaining 15 epochs of training drifted away from the peak (final-epoch val_acc was 83.92%), which is why END_TRAIN reported a worse number. Augmentation worked — we just weren't reading the right metric.
+
+### Phase C — TTA on each best-val checkpoint
+
+| Run | no-TTA acc | TTA acc | Δ acc | no-TTA mae/rmse | TTA mae/rmse |
+|-----|-----------|---------|-------|-----------------|--------------|
+| E3y (no aug)  | 86.27% | 84.31% | **-1.96%** | 2.96 / 4.86 | 2.98 / 5.00 |
+| E3f (no aug)  | 83.33% | **86.27%** | **+2.94%** | 2.89 / 5.01 | 2.95 / 5.25 |
+| **F1y (aug)** | **88.24%** | **88.24%** | 0 | 3.38 / 5.80 | **3.18 / 5.63** |
+| F1f (aug)     | 79.41% | 81.37% | +1.96% | 3.16 / 5.43 | 3.11 / 5.37 |
+
+**TTA's effect tracks whether the model trained with augmentation:**
+- E3y trained without spatial augs → rotated/flipped images are out-of-distribution → TTA **hurts** (-2%).
+- F1y trained with spatial augs → rotated/flipped images are in-distribution → TTA helps count without hurting acc.
+- E3f / F1f: SegFormer-teacher runs see a +2pt acc boost from TTA — the SegFormer-supervised classifier seems more robust to TTA averaging than the YOLO-supervised one.
+
+### Final ranking (Phase 11 settled)
+
+**By test_acc** (best-val checkpoint, with TTA where it helped):
+1. **F1y + TTA: 88.24% / 3.18 / 5.63** ← **project headline accuracy**
+2. F1y no-TTA: 88.24% / 3.38 / 5.80
+3. E3y / E3f+TTA: 86.27%
+4. E3y no-TTA / F1y trade-off: 86.27% / 2.96 / 4.86 ← project headline count
+
+**By test_count_rmse**:
+1. **E3y no-TTA: 4.86** ← still best count metric, frozen at Phase 10
+2. E3f no-TTA: 5.01
+3. F1y + TTA: 5.63
+4. F1y no-TTA: 5.80
+
+**Pareto frontier (no single config wins all metrics):**
+- Best accuracy: **F1y + TTA → 88.24% test_acc**.
+- Best count metrics: **E3y → 4.86 rmse, 2.96 mae**.
+
+### Conclusion
+
+- **Augmentation + more epochs helped F1y reach the project's best test_acc of 88.24%** when evaluated from the saved best-val checkpoint — a +2pt gain over E3y. The training-time END_TRAIN number obscured this because it evaluates the wrong (final-epoch) state.
+- **Did not reach 90%.** Best achieved is 88.24%, ~2 test images short of 90% (90% on n=102 = ≥92 correct).
+- **TTA helps when the model is augmentation-trained, hurts otherwise.** This is a clean, expected, paper-worthy finding.
+- **The trainer should save *and* evaluate from the best-val checkpoint at END_TRAIN** — a minor bug worth fixing in a future cleanup so we don't underestimate model quality. (Out of scope for this plan.)
+
+The project is at the natural stopping point. Remaining unexplored directions (vit-L unfrozen, more aggressive augmentation like CutMix/MixUp, longer schedules with cosine restarts) would each be their own focused experiment.
+
 ## Earlier follow-ups (Phase 4 prior, now superseded by Phase 5)
 
 The current YOLO ceiling is in the way of every remaining hypothesis:

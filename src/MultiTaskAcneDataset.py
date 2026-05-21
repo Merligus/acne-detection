@@ -1,5 +1,6 @@
 import os
 import math
+import random
 from typing import List, Tuple
 
 import numpy as np
@@ -8,6 +9,8 @@ from PIL import Image
 import torch
 import torch.nn.functional as F
 from torch.utils.data import Dataset
+import torchvision.transforms.functional as TF
+from torchvision.transforms import ColorJitter
 
 # ---------------------------------------------------------------------------
 # Density-map utilities
@@ -103,6 +106,7 @@ class MultiTaskAcneDataset(Dataset):
         segformer_model=None,
         segformer_device: str = "cuda",
         logger=None,
+        augment: bool = False,
     ):
         self.samples = samples
         self.image_processor = image_processor
@@ -110,6 +114,8 @@ class MultiTaskAcneDataset(Dataset):
         self.sigma = sigma
         self.density_source = density_source
         self.yolo_conf = yolo_conf
+        self.augment = augment
+        self._color_jitter = ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05) if augment else None
 
         self.yolo_cache = None
         self.segformer_cache = None
@@ -210,7 +216,6 @@ class MultiTaskAcneDataset(Dataset):
         img_path, label_path = self.samples[idx]
 
         image = Image.open(img_path).convert("RGB")
-        pixel_values = self.image_processor(images=image, return_tensors="pt")["pixel_values"][0]
 
         # Severity label always derives from GT boxes (we want to predict real severity).
         gt_boxes = parse_yolo_label_file(label_path)
@@ -242,6 +247,21 @@ class MultiTaskAcneDataset(Dataset):
         else:
             density = boxes_to_density_map(gt_boxes, self.density_map_size, self.sigma)
             count_value = float(gt_boxes.shape[0])
+
+        if self.augment:
+            # HFlip with p=0.5 — flips image AND density horizontally together.
+            if random.random() < 0.5:
+                image = TF.hflip(image)
+                density = torch.flip(density, dims=[-1])
+            # Rotation ±10° with p=0.5 — same angle to image + density.
+            if random.random() < 0.5:
+                angle = random.uniform(-10.0, 10.0)
+                image = TF.rotate(image, angle, fill=0)
+                density = TF.rotate(density.unsqueeze(0), angle, fill=0.0).squeeze(0)
+            # ColorJitter (image only).
+            image = self._color_jitter(image)
+
+        pixel_values = self.image_processor(images=image, return_tensors="pt")["pixel_values"][0]
 
         return {
             "pixel_values": pixel_values,

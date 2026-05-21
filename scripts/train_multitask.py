@@ -115,6 +115,11 @@ if __name__ == "__main__":
         help="Learning rate for the backbone when --unfreeze-backbone. Defaults to --density-lr.",
     )
     parser.add_argument(
+        "--augment",
+        action="store_true",
+        help="Enable HFlip + rotation ±10° + ColorJitter on the train split only.",
+    )
+    parser.add_argument(
         "--weight-decay",
         required=False,
         default=1e-4,
@@ -237,6 +242,7 @@ if __name__ == "__main__":
     DENSITY_WEIGHT_DECAY = args.density_weight_decay
     UNFREEZE_BACKBONE = args.unfreeze_backbone
     BACKBONE_LR = args.backbone_lr
+    AUGMENT = args.augment
     WARMUP_RATIO = args.warmup_ratio
     EVAL_EVERY_STEPS = args.eval_every_steps
     DENSITY_MAP_SIZE = args.density_map_size
@@ -316,6 +322,7 @@ if __name__ == "__main__":
         segformer_model=segformer_teacher,
         segformer_device=("cuda" if torch.cuda.is_available() else "cpu"),
         logger=logging,
+        augment=AUGMENT,
     )
     # Free the teacher's GPU memory before DINOv3 training begins — the cache
     # is CPU tensors and the segformer model isn't needed anymore.

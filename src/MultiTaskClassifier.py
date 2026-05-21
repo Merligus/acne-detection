@@ -404,5 +404,15 @@ class MultiTaskImageClassifier:
                 )
             self.logging.info(f"END EPOCH {epoch}: val_loss={metrics['val_loss']:.4f} " f"val_acc={metrics['val_acc']*100:.2f}% " f"val_count_mae={metrics['val_mae']:.2f} " f"val_count_rmse={metrics['val_rmse']:.2f} " f"(best_acc={best_acc*100:.2f}%)")
 
+        # Load the best-val checkpoint before the final test evaluation. The
+        # final-epoch model state can drift below the peak val_acc (val_acc
+        # oscillates while train_loss keeps falling), so we evaluate the
+        # checkpoint we actually save and ship.
+        best_ckpt_path = os.path.join(checkpoint_dir, self._ckpt_filename)
+        if os.path.isfile(best_ckpt_path):
+            ckpt = torch.load(best_ckpt_path, map_location=self.device)
+            self.model.load_state_dict(ckpt["model_state_dict"])
+            if self.logging:
+                self.logging.info(f"END TRAIN: loaded best-val checkpoint " f"(epoch={ckpt.get('epoch', '?')}, step={ckpt.get('step', '?')}, best_val_acc={best_acc*100:.2f}%)")
         metrics = self.evaluate(test_loader, criterion_cls)
         self.logging.info(f"END TRAIN: test_loss={metrics['val_loss']:.4f} " f"test_acc={metrics['val_acc']*100:.2f}% " f"test_count_mae={metrics['val_mae']:.2f} " f"test_count_rmse={metrics['val_rmse']:.2f}")
