@@ -33,6 +33,18 @@ pip install -r requirements.txt
 HF_TOKEN=hf_xxxxxxxxxxxxxxxxxxxxxxxx
 ```
 
+## Pretrained weights
+
+**No model weights are committed in this repo.** Multi-task checkpoints (985 MB each for the unfrozen vit-B variants) exceed GitHub's 100 MB per-file limit; smaller teacher weights are also kept out for consistency.
+
+Three categories of weights you may need:
+
+| Category | Files | Size | How to obtain |
+|----------|-------|------|---------------|
+| YOLO baseline (teacher for F1y / E3y) | `runs/detect/Acne_Detection/yolo26s7/weights/best.pt` | 58 MB | Re-train via `scripts/train.py --model-name yolo26s --dataset acne04-dataset-512 --imgsz 512 --epochs 300 --patience 50` (~1.5 hr), or download from `https://drive.google.com/file/d/1bNBz3y9jQB4i_OJhpVDVSbtjYUu9vwkh/view?usp=sharing`. |
+| SegFormer-B1 teacher (for E3f) | `acne-segmentation/checkpoint/best_model_segformer_*.pth` | 53 MB | Re-train via `python acne-segmentation/build_splits.py && python acne-segmentation/train_script.py --architecture SegFormer ... --batch_size 4` (~2 hr), or download from `https://drive.google.com/file/d/1js7F81yLEHptUzlmxV_X9B8v26Ms6eRT/view?usp=sharing`. |
+| Multi-task DINOv3 (F1y / E3y / E3f best) | `saved_models/<run>/facebook_dinov3-vitb16-pretrain-lvd1689m_multitask_best.pt` | 985 MB each | Re-train via the commands below (~1 hr each on a 6 GB GPU), or download from `https://drive.google.com/file/d/1yHBL3_NYmljT1z_3LvoHCGlNS2-S-NzR/view?usp=sharing`. |
+
 ## Datasets
 
 - `acne04-dataset-512/` — letterboxed to 512×512. Used by every multi-task run. Generated via `python scripts/letterbox_dataset.py --src acne04-dataset --dst acne04-dataset-512 --size 512`.
